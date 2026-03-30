@@ -2,11 +2,11 @@
 
 本项目实现了一个端到端交互流程：
 
-- 实时显示摄像头画面
+- 启动时可选输入源：实时摄像头 / 本地上传图片
 - 通过按钮开始/停止语音输入用户需求
-- 在停止语音输入时抓取当前画面作为本次图片
+- 在停止语音输入时，将当前输入图像与文本一起送入模型
 - 将语音识别文本 + 图片发送到视觉 API
-- 获取目标打标结果并叠加展示在实时画面上
+- 获取目标打标结果并叠加展示在窗口画面上
 
 核心目标是让用户可以一边看实时画面，一边用语音描述要找的目标，然后快速看到打标结果。
 
@@ -20,11 +20,15 @@
 
 提供以下交互能力：
 
+- 启动模式：camera（实时摄像头）/ image（上传图片）
 - 画面内按钮：开始录音 / 停止录音
-- 停止时抓拍：使用点击停止那一刻的图像作为推理输入
+- 语音文本确认：先显示语音转文字结果，可手动修改（支持中文输入）后再确认上传
+- 停止时推理：
+  - camera 模式使用点击停止那一刻的画面
+  - image 模式使用启动时指定的图片
 - 语音识别：Whisper 将录音转为文本需求
 - 视觉定位：Qwen-VL 返回目标框
-- 实时可视化：将 API 打标结果叠加显示在实时摄像头窗口
+- 实时可视化：将 API 打标结果叠加显示在主窗口
 
 ### 其他脚本（模块化能力）
 
@@ -50,9 +54,13 @@ photos/
 ## 3. 环境要求
 
 - Python 3.9+
-- 可用的摄像头设备
 - 可用的麦克风设备
 - ffmpeg（Whisper 相关依赖）
+
+说明：
+
+- 使用 `camera` 模式需要摄像头
+- 使用 `image` 模式不需要摄像头
 
 ---
 
@@ -60,6 +68,12 @@ photos/
 
 ```bash
 pip install -U opencv-python sounddevice numpy openai-whisper openai Pillow
+```
+
+若希望“把照片拖入启动框内”，请额外安装：
+
+```bash
+pip install tkinterdnd2
 ```
 
 说明：
@@ -96,6 +110,19 @@ pip install -U opencv-python sounddevice numpy openai-whisper openai Pillow
 python realtime_voice_camera_grounding.py
 ```
 
+启动时可选输入源：
+
+```bash
+# 推荐：直接启动后在弹窗里选 camera/image
+python realtime_voice_camera_grounding.py
+
+# 也可命令行固定 camera
+python realtime_voice_camera_grounding.py --startup-mode camera
+
+# 仍支持命令行直传图片路径（可选）
+python realtime_voice_camera_grounding.py --startup-mode image --input-image photos/demo.jpg
+```
+
 可选参数示例：
 
 ```bash
@@ -109,6 +136,8 @@ python realtime_voice_camera_grounding.py --camera-index 0 --whisper-model turbo
 --width             采集宽度，默认 1280
 --height            采集高度，默认 720
 --sample-rate       音频采样率，默认 16000
+--startup-mode      启动输入源：auto/camera/image，默认 auto
+--input-image       上传图片路径（image 模式）
 --whisper-model     tiny/base/small/medium/large/turbo
 --device            auto/cpu/cuda
 --source-language   输入语种（如 zh/en），默认 auto
@@ -120,16 +149,35 @@ python realtime_voice_camera_grounding.py --camera-index 0 --whisper-model turbo
 
 ## 7. 交互流程
 
+### camera 模式（实时摄像头）
+
 1. 启动程序后，看到实时摄像头窗口。
 2. 点击“开始录音”。
 3. 说出需求，例如：圈出左边穿红衣服的人。
 4. 点击“停止录音”。
-5. 程序会在停止时抓取当前帧，并执行：
-   - 语音转文本
-   - 图片 + 文本发送 API
-   - 返回打标结果
-6. 打标结果叠加显示在实时画面中。
-7. 按 `q` 退出程序。
+5. 程序先执行语音转文本，并在屏幕显示 `Editable Text`。
+6. 用户可直接键盘修改文本（Backspace 删除）。
+7. 需要输入中文时，点击 `Edit Text` 打开编辑框再输入。
+8. 点击 `Confirm Upload`（或按 Enter）确认上传。
+9. 程序再执行图片 + 文本定位并返回打标结果。
+10. 打标结果叠加显示在实时画面中。
+11. 按 `q` 退出程序。
+
+### image 模式（上传图片 + 语音指代）
+
+1. 启动程序后，在“启动模式”弹窗中选择 `Image`。
+2. 将照片直接拖入弹窗中的拖拽框（或点击“浏览”）。
+3. 点击“开始”，程序加载图片并显示在窗口中。
+4. 点击“开始录音”。
+5. 说出需求，例如：圈出图中左侧红色杯子。
+6. 点击“停止录音”。
+7. 程序先显示语音转文字结果，用户可键盘修改。
+8. 若要输入中文，点击 `Edit Text` 打开编辑框输入。
+9. 点击 `Confirm Upload`（或按 Enter）后，程序才会调用视觉 API。
+10. 程序执行：文本 + 图片定位 -> 叠加展示结果。
+11. 可重复录音多次，按 `q` 退出程序。
+
+补充：若未安装 `tkinterdnd2`，拖拽框会提示“拖拽未启用”，此时可继续使用“浏览”选择图片。
 
 ---
 
