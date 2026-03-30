@@ -77,6 +77,7 @@ class RealtimeVoiceGroundingApp:
 
         self.current_frame = None
         self.overlay_image = None
+        self.last_boxes = []
         self.last_query = ""
         self.pending_query = ""
         self.pending_snapshot = None
@@ -429,6 +430,8 @@ class RealtimeVoiceGroundingApp:
     def _build_prompt(self, query):
         return (
             "你是视觉定位助手。请根据用户描述在图中找目标并返回 JSON。"
+            "当图中有多个符合条件的目标时，必须返回所有目标，"
+            "每个目标单独一个框，不要只返回一个。"
             "输出必须是纯 JSON，不要 markdown，不要解释。"
             "JSON 格式: "
             '{"boxes":[{"label":"目标名","bbox":[x1,y1,x2,y2],"score":0.0}]}'
@@ -436,6 +439,26 @@ class RealtimeVoiceGroundingApp:
             "如果找不到目标，返回 {\"boxes\":[]}。"
             f"用户描述: {query}"
         )
+
+    def _extract_boxes_payload(self, parsed):
+        if isinstance(parsed, dict):
+            if isinstance(parsed.get("boxes"), list):
+                return parsed.get("boxes", [])
+
+            bbox = parsed.get("bbox")
+            if isinstance(bbox, list) and len(bbox) == 4:
+                return [
+                    {
+                        "label": parsed.get("label") or "target_1",
+                        "bbox": bbox,
+                        "score": parsed.get("score"),
+                    }
+                ]
+
+        if isinstance(parsed, list):
+            return parsed
+
+        return []
 
     def _image_to_data_url(self, frame_bgr):
         ok, encoded = self.cv2.imencode(".jpg", frame_bgr)
@@ -504,7 +527,7 @@ class RealtimeVoiceGroundingApp:
         raise RuntimeError("视觉模型调用失败")
 
     def _normalize_boxes(self, parsed, width, height):
-        boxes = parsed.get("boxes", []) if isinstance(parsed, dict) else []
+        boxes = self._extract_boxes_payload(parsed)
         result = []
 
         for i, item in enumerate(boxes, start=1):
@@ -542,7 +565,26 @@ class RealtimeVoiceGroundingApp:
                 }
             )
 
+        max_boxes = max(0, int(self.args.max_boxes))
+        if max_boxes > 0:
+            result = result[:max_boxes]
+
         return result
+
+    def _save_boxes_json(self, query, boxes):
+        output_path = str(self.args.result_json or "").strip()
+        if not output_path:
+            return
+
+        payload = {
+            "query": query,
+            "count": len(boxes),
+            "model": self.active_model_name,
+            "boxes": boxes,
+        }
+
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
 
     def _draw_boxes(self, frame_bgr, boxes):
         image = frame_bgr.copy()
@@ -825,9 +867,11 @@ class RealtimeVoiceGroundingApp:
         try:
             boxes = self._infer_boxes(snapshot, query)
             marked = self._draw_boxes(snapshot, boxes)
+            self._save_boxes_json(query, boxes)
 
             with self.state_lock:
                 self.overlay_image = marked
+                self.last_boxes = boxes
                 self.last_query = query
                 self.pending_query = ""
                 self.pending_snapshot = None
@@ -902,6 +946,7 @@ class RealtimeVoiceGroundingApp:
         with self.state_lock:
             status = self.status_text
             query = self.last_query
+            box_count = len(self.last_boxes)
             pending_query = self.pending_query
             err = self.last_error
             is_recording = self.recording
@@ -914,6 +959,7 @@ class RealtimeVoiceGroundingApp:
         if query:
             show_query = query if len(query) <= 55 else (query[:52] + "...")
             self._draw_text(frame, f"Last Query: {show_query}", (20, h - 110), (255, 255, 0), font_scale=0.62, thickness=2)
+            self._draw_text(frame, f"Boxes: {box_count}", (20, h - 92), (255, 220, 120), font_scale=0.58, thickness=2)
 
         if pending_query:
             show_pending = pending_query if len(pending_query) <= 70 else (pending_query[:67] + "...")
@@ -1038,6 +1084,17 @@ def parse_args():
         "--model",
         default="qwen3.5-vl-plus",
         help="视觉模型名，默认 qwen3.5-vl-plus",
+    )
+    parser.add_argument(
+        "--max-boxes",
+        type=int,
+        default=20,
+        help="最多保留的锚框数量，默认 20；设为 0 表示不限",
+    )
+    parser.add_argument(
+        "--result-json",
+        default="latest_boxes.json",
+        help="锚框结果 JSON 输出路径，默认 latest_boxes.json；留空则不保存",
     )
     parser.add_argument(
         "--api-key-env",

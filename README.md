@@ -28,6 +28,7 @@
   - image 模式使用启动时指定的图片
 - 语音识别：Whisper 将录音转为文本需求
 - 视觉定位：Qwen-VL 返回目标框
+- 多目标支持：同一需求可返回多个锚框数据
 - 实时可视化：将 API 打标结果叠加显示在主窗口
 
 ### 其他脚本（模块化能力）
@@ -143,6 +144,22 @@ python realtime_voice_camera_grounding.py --camera-index 0 --whisper-model turbo
 --source-language   输入语种（如 zh/en），默认 auto
 --api-config        API 配置文件路径，默认 apikey_config.json
 --model             视觉模型名，默认 qwen3.5-vl-plus
+--max-boxes         最多保留的锚框数量，默认 20（0 表示不限）
+--result-json       锚框结果输出 JSON，默认 latest_boxes.json（留空不保存）
+```
+
+锚框结果 JSON 示例：
+
+```json
+{
+  "query": "圈出左边穿红衣服的人",
+  "count": 3,
+  "model": "qwen3.5-vl-plus",
+  "boxes": [
+    {"bbox": [120, 88, 260, 420], "label": "person_red_left", "score": 0.93},
+    {"bbox": [300, 96, 438, 430], "label": "person_red_center", "score": 0.89}
+  ]
+}
 ```
 
 ---
