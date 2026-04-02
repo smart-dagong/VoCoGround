@@ -69,6 +69,14 @@ class RealtimeVoiceGroundingApp:
         self._maybe_prompt_startup_source()
 
         self.window_name = "Realtime Voice Grounding"
+        self.window_width = max(960, int(args.window_width))
+        self.window_height = max(640, int(args.window_height))
+        self.panel_width = max(280, int(args.panel_width))
+        self.panel_height = max(180, int(args.panel_height))
+        self.top_bar_height = 90
+        self.status_bar_height = 180
+        self.content_padding = 16
+        self.panel_gap = 20
         self.input_mode = self._resolve_input_mode()
         self.upload_image_path = None
         self.static_image = None
@@ -90,13 +98,16 @@ class RealtimeVoiceGroundingApp:
         self.audio_lock = threading.Lock()
         self.state_lock = threading.Lock()
 
-        self.btn_start = (20, 20, 180, 70)
-        self.btn_stop = (200, 20, 360, 70)
-        self.btn_confirm = (380, 20, 620, 70)
-        self.btn_edit = (640, 20, 820, 70)
-        self.btn_clear = (840, 20, 1000, 70)
-        self.btn_change_image = (1010, 20, 1160, 70)
-        self.btn_exit = (1180, 20, 1260, 70)
+        self.btn_start = (0, 0, 0, 0)
+        self.btn_stop = (0, 0, 0, 0)
+        self.btn_confirm = (0, 0, 0, 0)
+        self.btn_edit = (0, 0, 0, 0)
+        self.btn_clear = (0, 0, 0, 0)
+        self.btn_change_image = (0, 0, 0, 0)
+        self.btn_exit = (0, 0, 0, 0)
+        self.left_panel_rect = (0, 0, 0, 0)
+        self.right_panel_rect = (0, 0, 0, 0)
+        self._refresh_layout()
         self.should_exit = False
 
         if self.input_mode == "image":
@@ -303,6 +314,97 @@ class RealtimeVoiceGroundingApp:
         if self.args.width > 0 and self.args.height > 0:
             image = self.cv2.resize(image, (self.args.width, self.args.height))
         return image
+
+    def _refresh_layout(self):
+        self._layout_buttons()
+        self._layout_panels()
+
+    def _layout_buttons(self):
+        labels = [
+            ("btn_start", "Start", 140),
+            ("btn_stop", "Stop", 140),
+            ("btn_confirm", "Confirm Upload", 200),
+            ("btn_edit", "Input Text", 160),
+            ("btn_clear", "Clear All", 150),
+            ("btn_change_image", "Change Image", 170),
+            ("btn_exit", "Exit", 110),
+        ]
+
+        margin_x = 18
+        gap = 12
+        y1 = 20
+        y2 = 70
+
+        base_total = sum(item[2] for item in labels)
+        available = max(400, self.window_width - margin_x * 2 - gap * (len(labels) - 1))
+        scale = min(1.0, available / float(base_total))
+
+        widths = [max(88, int(item[2] * scale)) for item in labels]
+        total_width = sum(widths) + gap * (len(labels) - 1)
+        start_x = max(margin_x, (self.window_width - total_width) // 2)
+
+        x = start_x
+        for idx, (attr_name, _, _) in enumerate(labels):
+            w = widths[idx]
+            setattr(self, attr_name, (x, y1, x + w, y2))
+            x += w + gap
+
+    def _layout_panels(self):
+        content_top = self.top_bar_height + self.content_padding
+        content_bottom = self.window_height - self.status_bar_height - self.content_padding
+        available_h = max(120, content_bottom - content_top)
+        panel_h = min(self.panel_height, available_h)
+
+        max_panel_w = max(180, (self.window_width - self.content_padding * 2 - self.panel_gap) // 2)
+        panel_w = min(self.panel_width, max_panel_w)
+
+        total_w = panel_w * 2 + self.panel_gap
+        start_x = max(self.content_padding, (self.window_width - total_w) // 2)
+        y1 = content_top + max(0, (available_h - panel_h) // 2)
+        y2 = y1 + panel_h
+
+        self.left_panel_rect = (start_x, y1, start_x + panel_w, y2)
+        right_x1 = start_x + panel_w + self.panel_gap
+        self.right_panel_rect = (right_x1, y1, right_x1 + panel_w, y2)
+
+    def _resize_keep_aspect(self, image, target_w, target_h):
+        if image is None or target_w <= 1 or target_h <= 1:
+            return None
+
+        src_h, src_w = image.shape[:2]
+        if src_h <= 0 or src_w <= 0:
+            return None
+
+        scale = min(target_w / float(src_w), target_h / float(src_h))
+        out_w = max(1, int(src_w * scale))
+        out_h = max(1, int(src_h * scale))
+        return self.cv2.resize(image, (out_w, out_h))
+
+    def _draw_image_panel(self, canvas, rect, title, image):
+        x1, y1, x2, y2 = rect
+        self.cv2.rectangle(canvas, (x1, y1), (x2, y2), (220, 220, 220), 2)
+        self._draw_text(canvas, title, (x1 + 10, max(20, y1 - 10)), (240, 240, 240), font_scale=0.72, thickness=2)
+
+        inner_pad = 10
+        ix1 = x1 + inner_pad
+        iy1 = y1 + inner_pad
+        ix2 = x2 - inner_pad
+        iy2 = y2 - inner_pad
+        self.cv2.rectangle(canvas, (ix1, iy1), (ix2, iy2), (40, 40, 40), -1)
+
+        if image is None:
+            self._draw_text(canvas, "No Image", (ix1 + 18, iy1 + 34), (180, 180, 180), font_scale=0.7, thickness=2)
+            return
+
+        rendered = self._resize_keep_aspect(image, ix2 - ix1, iy2 - iy1)
+        if rendered is None:
+            self._draw_text(canvas, "Invalid Image", (ix1 + 18, iy1 + 34), (180, 180, 180), font_scale=0.7, thickness=2)
+            return
+
+        rh, rw = rendered.shape[:2]
+        ox = ix1 + ((ix2 - ix1) - rw) // 2
+        oy = iy1 + ((iy2 - iy1) - rh) // 2
+        canvas[oy:oy + rh, ox:ox + rw] = rendered
 
     def _prepare_ssl_environment(self):
         cert_path = os.getenv("SSL_CERT_FILE", "").strip()
@@ -1042,27 +1144,22 @@ class RealtimeVoiceGroundingApp:
         )
         self.cv2.rectangle(frame, (self.btn_exit[0], self.btn_exit[1]), (self.btn_exit[2], self.btn_exit[3]), exit_color, -1)
 
-        self._draw_text(frame, "Start", (self.btn_start[0] + 34, self.btn_start[1] + 38), (255, 255, 255), font_scale=0.8, thickness=2)
-        self._draw_text(frame, "Stop", (self.btn_stop[0] + 44, self.btn_stop[1] + 38), (255, 255, 255), font_scale=0.8, thickness=2)
-        self._draw_text(
-            frame,
-            "Confirm Upload",
-            (self.btn_confirm[0] + 18, self.btn_confirm[1] + 38),
-            (255, 255, 255),
-            font_scale=0.72,
-            thickness=2,
-        )
-        self._draw_text(frame, "Input Text", (self.btn_edit[0] + 25, self.btn_edit[1] + 38), (255, 255, 255), font_scale=0.72, thickness=2)
-        self._draw_text(frame, "Clear All", (self.btn_clear[0] + 24, self.btn_clear[1] + 38), (255, 255, 255), font_scale=0.72, thickness=2)
-        self._draw_text(
-            frame,
-            "Change Image",
-            (self.btn_change_image[0] + 6, self.btn_change_image[1] + 38),
-            (255, 255, 255),
-            font_scale=0.6,
-            thickness=2,
-        )
-        self._draw_text(frame, "Exit", (self.btn_exit[0] + 18, self.btn_exit[1] + 38), (255, 255, 255), font_scale=0.72, thickness=2)
+        labels = [
+            (self.btn_start, "Start", 0.72),
+            (self.btn_stop, "Stop", 0.72),
+            (self.btn_confirm, "Confirm Upload", 0.66),
+            (self.btn_edit, "Input Text", 0.66),
+            (self.btn_clear, "Clear All", 0.66),
+            (self.btn_change_image, "Change Image", 0.62),
+            (self.btn_exit, "Exit", 0.68),
+        ]
+        for rect, label, scale in labels:
+            x1, y1, x2, y2 = rect
+            text_size, _ = self.cv2.getTextSize(label, self.cv2.FONT_HERSHEY_SIMPLEX, scale, 2)
+            tw, th = text_size
+            tx = x1 + max(8, ((x2 - x1) - tw) // 2)
+            ty = y1 + ((y2 - y1) + th) // 2
+            self._draw_text(frame, label, (tx, ty), (255, 255, 255), font_scale=scale, thickness=2)
 
     def _draw_status(self, frame):
         with self.state_lock:
@@ -1075,21 +1172,22 @@ class RealtimeVoiceGroundingApp:
             overlay = None if self.overlay_image is None else self.overlay_image.copy()
 
         h, w = frame.shape[:2]
-        self.cv2.rectangle(frame, (10, h - 180), (w - 10, h - 10), (0, 0, 0), -1)
-        self._draw_text(frame, f"Status: {status}", (20, h - 145), (255, 255, 255), font_scale=0.65, thickness=2)
+        status_top = h - self.status_bar_height
+        self.cv2.rectangle(frame, (10, status_top), (w - 10, h - 10), (0, 0, 0), -1)
+        self._draw_text(frame, f"Status: {status}", (20, status_top + 35), (255, 255, 255), font_scale=0.65, thickness=2)
 
         if query:
             show_query = query if len(query) <= 55 else (query[:52] + "...")
-            self._draw_text(frame, f"Last Query: {show_query}", (20, h - 110), (255, 255, 0), font_scale=0.62, thickness=2)
-            self._draw_text(frame, f"Boxes: {box_count}", (20, h - 92), (255, 220, 120), font_scale=0.58, thickness=2)
+            self._draw_text(frame, f"Last Query: {show_query}", (20, status_top + 70), (255, 255, 0), font_scale=0.62, thickness=2)
+            self._draw_text(frame, f"Boxes: {box_count}", (20, status_top + 88), (255, 220, 120), font_scale=0.58, thickness=2)
 
         if pending_query:
             show_pending = pending_query if len(pending_query) <= 70 else (pending_query[:67] + "...")
-            self._draw_text(frame, f"Editable Text: {show_pending}_", (20, h - 75), (160, 255, 160), font_scale=0.62, thickness=2)
+            self._draw_text(frame, f"Editable Text: {show_pending}_", (20, status_top + 105), (160, 255, 160), font_scale=0.62, thickness=2)
             self._draw_text(
                 frame,
                 "Use Input Text button to edit (Chinese supported) | Click Confirm to upload | Voice appends",
-                (20, h - 45),
+                (20, status_top + 135),
                 (210, 210, 210),
                 font_scale=0.55,
                 thickness=1,
@@ -1098,7 +1196,7 @@ class RealtimeVoiceGroundingApp:
             self._draw_text(
                 frame,
                 "Use Input Text button, or Start/Stop voice then Confirm Upload",
-                (20, h - 45),
+                (20, status_top + 135),
                 (210, 210, 210),
                 font_scale=0.55,
                 thickness=1,
@@ -1112,21 +1210,15 @@ class RealtimeVoiceGroundingApp:
             self.cv2.circle(frame, (w - 35, 35), 10, (0, 0, 255), -1)
             self.cv2.putText(frame, "REC", (w - 85, 42), self.cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 255), 2, self.cv2.LINE_AA)
 
-        if overlay is not None:
-            target_w = int(w * 0.38)
-            target_h = int(h * 0.38)
-            resized = self.cv2.resize(overlay, (target_w, target_h))
-            x1 = w - target_w - 15
-            y1 = 85
-            frame[y1:y1 + target_h, x1:x1 + target_w] = resized
-            self.cv2.rectangle(frame, (x1, y1), (x1 + target_w, y1 + target_h), (255, 255, 255), 2)
-            self._draw_text(frame, "API Result", (x1 + 10, y1 - 12), (255, 255, 255), font_scale=0.7, thickness=2)
+        self._draw_image_panel(frame, self.left_panel_rect, "Uploaded / Live Image", self.current_frame)
+        self._draw_image_panel(frame, self.right_panel_rect, "API Result", overlay)
 
     def run(self):
         self._open_input_source()
         self._start_audio_stream()
 
-        self.cv2.namedWindow(self.window_name)
+        self.cv2.namedWindow(self.window_name, self.cv2.WINDOW_NORMAL)
+        self.cv2.resizeWindow(self.window_name, self.window_width, self.window_height)
         self.cv2.setMouseCallback(self.window_name, self._on_mouse)
 
         try:
@@ -1138,8 +1230,9 @@ class RealtimeVoiceGroundingApp:
                 else:
                     frame = self.static_image.copy()
 
-                self.current_frame = frame
-                canvas = frame.copy()
+                self.current_frame = frame.copy()
+                canvas = self.np.zeros((self.window_height, self.window_width, 3), dtype=self.np.uint8)
+                canvas[:] = (24, 24, 24)
 
                 self._draw_buttons(canvas)
                 self._draw_status(canvas)
@@ -1147,7 +1240,7 @@ class RealtimeVoiceGroundingApp:
                 hint = "Press q to quit"
                 if self.input_mode == "image":
                     hint = "Image mode | Press q to quit"
-                self._draw_text(canvas, hint, (20, 105), (255, 255, 255), font_scale=0.7, thickness=2)
+                self._draw_text(canvas, hint, (20, self.top_bar_height + 10), (255, 255, 255), font_scale=0.68, thickness=2)
                 self.cv2.imshow(self.window_name, canvas)
 
                 key = self.cv2.waitKey(1) & 0xFF
@@ -1195,6 +1288,10 @@ def parse_args():
     parser.add_argument("--camera-index", type=int, default=0, help="摄像头索引，默认 0")
     parser.add_argument("--width", type=int, default=1280, help="预设采集宽度，默认 1280")
     parser.add_argument("--height", type=int, default=720, help="预设采集高度，默认 720")
+    parser.add_argument("--window-width", type=int, default=1400, help="程序窗口宽度，默认 1400")
+    parser.add_argument("--window-height", type=int, default=900, help="程序窗口高度，默认 900")
+    parser.add_argument("--panel-width", type=int, default=620, help="左右图片面板宽度，默认 620")
+    parser.add_argument("--panel-height", type=int, default=430, help="左右图片面板高度，默认 430")
     parser.add_argument("--sample-rate", type=int, default=16000, help="麦克风采样率，默认 16000")
 
     parser.add_argument(
