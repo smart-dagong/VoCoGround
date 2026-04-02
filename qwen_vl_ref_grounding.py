@@ -1,5 +1,6 @@
 import argparse
 import base64
+import ast
 import importlib
 import json
 import os
@@ -116,18 +117,73 @@ def extract_first_json(text):
     text = text.strip()
 
     if text.startswith("```"):
-        text = re.sub(r"^```[a-zA-Z]*\\n", "", text)
-        text = re.sub(r"\\n```$", "", text)
+        text = re.sub(r"^```[a-zA-Z]*\n", "", text)
+        text = re.sub(r"\n```$", "", text)
 
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
+    for candidate in json_candidates(text):
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            try:
+                return ast.literal_eval(candidate)
+            except (ValueError, SyntaxError):
+                pass
 
-    match = re.search(r"\{[\s\S]*\}", text)
-    if not match:
-        raise ValueError("模型返回中未找到 JSON")
-    return json.loads(match.group(0))
+    fallback_boxes = extract_boxes_from_text(text)
+    if fallback_boxes:
+        return {"boxes": fallback_boxes}
+
+    raise ValueError(f"模型返回无法解析为 JSON: {text[:200]}")
+
+
+def json_candidates(text):
+    candidates = []
+
+    if text:
+        candidates.append(text)
+
+    stripped = text.strip()
+    if stripped and stripped not in candidates:
+        candidates.append(stripped)
+
+    if stripped.startswith("```"):
+        cleaned = re.sub(r"^```[a-zA-Z]*\n", "", stripped)
+        cleaned = re.sub(r"\n```$", "", cleaned)
+        if cleaned and cleaned not in candidates:
+            candidates.append(cleaned)
+
+    match = re.search(r"\{[\s\S]*\}", stripped)
+    if match:
+        json_text = match.group(0)
+        if json_text not in candidates:
+            candidates.append(json_text)
+
+    return candidates
+
+
+def extract_boxes_from_text(text):
+    pattern = re.compile(
+        r"['\"]?label['\"]?\s*[:=]\s*['\"]?(?P<label>[^,'\"\]\}\n]+)['\"]?\s*,?\s*"
+        r"['\"]?bbox['\"]?\s*[:=]\s*\[(?P<bbox>[^\]]+)\]",
+        re.IGNORECASE,
+    )
+
+    boxes = []
+    for match in pattern.finditer(text):
+        label = str(match.group("label")).strip()
+        bbox_text = match.group("bbox")
+        numbers = re.findall(r"-?\d+(?:\.\d+)?", bbox_text)
+        if len(numbers) != 4:
+            continue
+
+        try:
+            bbox = [float(value) for value in numbers]
+        except ValueError:
+            continue
+
+        boxes.append({"label": label or "target", "bbox": bbox})
+
+    return boxes
 
 
 def clamp(v, low, high):
@@ -137,6 +193,7 @@ def clamp(v, low, high):
 def normalize_boxes(parsed, width, height):
     boxes = parsed.get("boxes", []) if isinstance(parsed, dict) else []
     normalized = []
+    label_counts = {}
 
     for i, item in enumerate(boxes, start=1):
         if not isinstance(item, dict):
@@ -168,13 +225,12 @@ def normalize_boxes(parsed, width, height):
         if right <= left or bottom <= top:
             continue
 
-        label = item.get("label") or f"target_{i}"
-        score = item.get("score")
+        base_label = str(item.get("label") or f"target_{i}").strip() or f"target_{i}"
+        label_counts[base_label] = label_counts.get(base_label, 0) + 1
         normalized.append(
             {
                 "bbox": [left, top, right, bottom],
-                "label": str(label),
-                "score": score,
+                "label": f"{base_label}{label_counts[base_label]}",
             }
         )
 
@@ -189,11 +245,7 @@ def draw_boxes(image_mod, draw_mod, font_mod, image_path, output_path, boxes, bo
     for item in boxes:
         left, top, right, bottom = item["bbox"]
         label = item["label"]
-        score = item.get("score")
-
         caption = label
-        if isinstance(score, (int, float)):
-            caption = f"{label} ({score:.2f})"
 
         draw.rectangle([left, top, right, bottom], outline=box_color, width=box_width)
 
@@ -217,7 +269,7 @@ def build_prompt(query):
         "你是视觉定位助手。请根据用户描述在图中找目标并返回 JSON。"
         "输出必须是纯 JSON，不要 markdown，不要解释。"
         "JSON 格式: "
-        '{"boxes":[{"label":"目标名","bbox":[x1,y1,x2,y2],"score":0.0}]}'
+        '{"boxes":[{"label":"目标名","bbox":[x1,y1,x2,y2]}]}'
         "。bbox 优先返回 0~1000 归一化坐标；若返回像素坐标也可。"
         "如果找不到目标，返回 {\"boxes\":[]}。"
         f"用户描述: {query}"
@@ -243,6 +295,15 @@ def infer_boxes(client, model, image_data_url, query):
     content = response.choices[0].message.content
     if not content:
         raise RuntimeError("模型返回为空")
+
+    print("\n[VLM 原始回答]")
+    if isinstance(content, list):
+        try:
+            print(json.dumps(content, ensure_ascii=False, indent=2))
+        except TypeError:
+            print(str(content))
+    else:
+        print(content)
 
     if isinstance(content, list):
         text_parts = []
@@ -304,7 +365,7 @@ def main():
     print(f"输出图片: {args.output}")
     print("锚框详情:")
     for i, item in enumerate(boxes, start=1):
-        print(f"{i}. label={item['label']}, bbox={item['bbox']}, score={item.get('score')}")
+        print(f"{i}. label={item['label']}, bbox={item['bbox']}")
 
 
 if __name__ == "__main__":

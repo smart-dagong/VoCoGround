@@ -1,5 +1,6 @@
 import argparse
 import base64
+import ast
 import importlib
 import json
 import os
@@ -519,19 +520,71 @@ class RealtimeVoiceGroundingApp:
         text = text.strip()
 
         if text.startswith("```"):
-            text = re.sub(r"^```[a-zA-Z]*\\n", "", text)
-            text = re.sub(r"\\n```$", "", text)
+            text = re.sub(r"^```[a-zA-Z]*\n", "", text)
+            text = re.sub(r"\n```$", "", text)
 
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            pass
+        for candidate in self._json_candidates(text):
+            try:
+                return json.loads(candidate)
+            except json.JSONDecodeError:
+                try:
+                    return ast.literal_eval(candidate)
+                except (ValueError, SyntaxError):
+                    pass
 
-        match = re.search(r"\{[\s\S]*\}", text)
-        if not match:
-            raise ValueError("模型返回中未找到 JSON")
+        fallback_boxes = self._extract_boxes_from_text(text)
+        if fallback_boxes:
+            return {"boxes": fallback_boxes}
 
-        return json.loads(match.group(0))
+        raise ValueError(f"模型返回无法解析为 JSON: {text[:200]}")
+
+    def _json_candidates(self, text):
+        candidates = []
+
+        if text:
+            candidates.append(text)
+
+        stripped = text.strip()
+        if stripped and stripped not in candidates:
+            candidates.append(stripped)
+
+        if stripped.startswith("```"):
+            cleaned = re.sub(r"^```[a-zA-Z]*\n", "", stripped)
+            cleaned = re.sub(r"\n```$", "", cleaned)
+            if cleaned and cleaned not in candidates:
+                candidates.append(cleaned)
+
+        match = re.search(r"\{[\s\S]*\}", stripped)
+        if match:
+            json_text = match.group(0)
+            if json_text not in candidates:
+                candidates.append(json_text)
+
+        return candidates
+
+    def _extract_boxes_from_text(self, text):
+        pattern = re.compile(
+            r"['\"]?label['\"]?\s*[:=]\s*['\"]?(?P<label>[^,'\"\]\}\n]+)['\"]?\s*,?\s*"
+            r"['\"]?bbox['\"]?\s*[:=]\s*\[(?P<bbox>[^\]]+)\]",
+            re.IGNORECASE,
+        )
+
+        boxes = []
+        for match in pattern.finditer(text):
+            label = str(match.group("label")).strip()
+            bbox_text = match.group("bbox")
+            numbers = re.findall(r"-?\d+(?:\.\d+)?", bbox_text)
+            if len(numbers) != 4:
+                continue
+
+            try:
+                bbox = [float(value) for value in numbers]
+            except ValueError:
+                continue
+
+            boxes.append({"label": label or "target", "bbox": bbox})
+
+        return boxes
 
     def _build_prompt(self, query):
         return (
@@ -540,7 +593,7 @@ class RealtimeVoiceGroundingApp:
             "每个目标单独一个框，不要只返回一个。"
             "输出必须是纯 JSON，不要 markdown，不要解释。"
             "JSON 格式: "
-            '{"boxes":[{"label":"目标名","bbox":[x1,y1,x2,y2],"score":0.0}]}'
+            '{"boxes":[{"label":"目标名","bbox":[x1,y1,x2,y2]}]}'
             "。bbox 优先返回 0~1000 归一化坐标；若返回像素坐标也可。"
             "如果找不到目标，返回 {\"boxes\":[]}。"
             f"用户描述: {query}"
@@ -557,7 +610,6 @@ class RealtimeVoiceGroundingApp:
                     {
                         "label": parsed.get("label") or "target_1",
                         "bbox": bbox,
-                        "score": parsed.get("score"),
                     }
                 ]
 
@@ -582,6 +634,15 @@ class RealtimeVoiceGroundingApp:
         content = response.choices[0].message.content
         if not content:
             raise RuntimeError("模型返回为空")
+
+        print("\n[VLM 原始回答]")
+        if isinstance(content, list):
+            try:
+                print(json.dumps(content, ensure_ascii=False, indent=2))
+            except TypeError:
+                print(str(content))
+        else:
+            print(content)
 
         if isinstance(content, list):
             text_parts = []
@@ -635,6 +696,7 @@ class RealtimeVoiceGroundingApp:
     def _normalize_boxes(self, parsed, width, height):
         boxes = self._extract_boxes_payload(parsed)
         result = []
+        label_counts = {}
 
         for i, item in enumerate(boxes, start=1):
             if not isinstance(item, dict):
@@ -663,11 +725,13 @@ class RealtimeVoiceGroundingApp:
             if right <= left or bottom <= top:
                 continue
 
+            base_label = str(item.get("label") or f"target_{i}").strip() or f"target_{i}"
+            label_counts[base_label] = label_counts.get(base_label, 0) + 1
+
             result.append(
                 {
                     "bbox": [left, top, right, bottom],
-                    "label": str(item.get("label") or f"target_{i}"),
-                    "score": item.get("score"),
+                    "label": f"{base_label}{label_counts[base_label]}",
                 }
             )
 
@@ -697,10 +761,7 @@ class RealtimeVoiceGroundingApp:
         for item in boxes:
             left, top, right, bottom = item["bbox"]
             label = item["label"]
-            score = item.get("score")
             caption = label
-            if isinstance(score, (int, float)):
-                caption = f"{label} ({score:.2f})"
 
             self.cv2.rectangle(image, (left, top), (right, bottom), (0, 0, 255), 2)
 
