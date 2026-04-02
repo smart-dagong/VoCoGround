@@ -173,12 +173,16 @@ python realtime_voice_camera_grounding.py --camera-index 0 --whisper-model turbo
 3. 说出需求，例如：圈出左边穿红衣服的人。
 4. 点击“停止录音”。
 5. 程序先执行语音转文本，并在屏幕显示 `Editable Text`。
-6. 用户可直接键盘修改文本（Backspace 删除）。
-7. 需要输入中文时，点击 `Edit Text` 打开编辑框再输入。
-8. 点击 `Confirm Upload`（或按 Enter）确认上传。
+6. 通过 `Input Text` 按钮打开编辑框修改文本。
+7. 编辑框支持中文输入。
+8. 点击 `Confirm Upload` 确认上传。
 9. 程序再执行图片 + 文本定位并返回打标结果。
 10. 打标结果叠加显示在实时画面中。
-11. 按 `q` 退出程序。
+11. 可点击 `Clear All` 一键清空当前输入文本。
+12. 可点击 `Change Image` 在运行中切换到新图片（无需重启）。
+13. 可点击 `Exit` 按钮直接退出（或按 `q`）。
+
+补充：也可不录音，点击 `Input Text` 输入文本后再点 `Confirm Upload` 上传当前画面；再次语音输入时会追加到现有文本，不会重置。
 
 ### image 模式（上传图片 + 语音指代）
 
@@ -188,11 +192,15 @@ python realtime_voice_camera_grounding.py --camera-index 0 --whisper-model turbo
 4. 点击“开始录音”。
 5. 说出需求，例如：圈出图中左侧红色杯子。
 6. 点击“停止录音”。
-7. 程序先显示语音转文字结果，用户可键盘修改。
-8. 若要输入中文，点击 `Edit Text` 打开编辑框输入。
-9. 点击 `Confirm Upload`（或按 Enter）后，程序才会调用视觉 API。
+7. 程序先显示语音转文字结果，用户可点击 `Input Text` 修改。
+8. 编辑框支持中文输入。
+9. 点击 `Confirm Upload` 后，程序才会调用视觉 API。
 10. 程序执行：文本 + 图片定位 -> 叠加展示结果。
-11. 可重复录音多次，按 `q` 退出程序。
+11. 可点击 `Clear All` 清空输入，重新编辑需求。
+12. 可点击 `Change Image` 更换图片并继续交互。
+13. 可重复录音多次，点击 `Exit`（或按 `q`）退出程序。
+
+补充：在 image 模式下也支持不录音，直接输入文本后确认上传。
 
 补充：若未安装 `tkinterdnd2`，拖拽框会提示“拖拽未启用”，此时可继续使用“浏览”选择图片。
 

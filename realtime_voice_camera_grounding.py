@@ -94,6 +94,10 @@ class RealtimeVoiceGroundingApp:
         self.btn_stop = (200, 20, 360, 70)
         self.btn_confirm = (380, 20, 620, 70)
         self.btn_edit = (640, 20, 820, 70)
+        self.btn_clear = (840, 20, 1000, 70)
+        self.btn_change_image = (1010, 20, 1160, 70)
+        self.btn_exit = (1180, 20, 1260, 70)
+        self.should_exit = False
 
         if self.input_mode == "image":
             self.upload_image_path = self._normalize_cli_path(self.args.input_image)
@@ -684,15 +688,25 @@ class RealtimeVoiceGroundingApp:
     def _on_mouse(self, event, x, y, flags, param):
         if event != self.cv2.EVENT_LBUTTONDOWN:
             return
-
-        if self._inside(x, y, self.btn_start):
-            self._start_recording()
-        elif self._inside(x, y, self.btn_stop):
-            self._stop_recording_and_process()
-        elif self._inside(x, y, self.btn_confirm):
-            self._confirm_upload()
-        elif self._inside(x, y, self.btn_edit):
-            self._edit_pending_text()
+        try:
+            if self._inside(x, y, self.btn_start):
+                self._start_recording()
+            elif self._inside(x, y, self.btn_stop):
+                self._stop_recording_and_process()
+            elif self._inside(x, y, self.btn_confirm):
+                self._confirm_upload()
+            elif self._inside(x, y, self.btn_edit):
+                self._edit_pending_text()
+            elif self._inside(x, y, self.btn_clear):
+                self._clear_all_input()
+            elif self._inside(x, y, self.btn_change_image):
+                self._change_image()
+            elif self._inside(x, y, self.btn_exit):
+                self._request_exit()
+        except Exception as exc:
+            with self.state_lock:
+                self.last_error = str(exc)
+                self.status_text = "Button action failed"
 
     def _inside(self, x, y, rect):
         x1, y1, x2, y2 = rect
@@ -715,8 +729,6 @@ class RealtimeVoiceGroundingApp:
             self.status_text = "Recording... click Stop"
             self.last_error = ""
             self.last_query = ""
-            self.pending_query = ""
-            self.pending_snapshot = None
 
     def _stop_recording_and_process(self):
         with self.state_lock:
@@ -764,7 +776,11 @@ class RealtimeVoiceGroundingApp:
 
             with self.state_lock:
                 self.pending_snapshot = snapshot
-                self.pending_query = query
+                existing = str(self.pending_query or "").strip()
+                if existing:
+                    self.pending_query = f"{existing} {query}".strip()
+                else:
+                    self.pending_query = query
                 self.status_text = "Review text, edit if needed, then Confirm Upload"
                 self.last_error = ""
         except Exception as exc:
@@ -783,16 +799,19 @@ class RealtimeVoiceGroundingApp:
             if self.recording:
                 self.status_text = "Stop recording first"
                 return
-            if self.pending_snapshot is None:
-                self.status_text = "No pending text, record first"
-                return
-
             query = str(self.pending_query).strip()
             if not query:
                 self.status_text = "Text is empty, type query first"
                 return
 
-            snapshot = self.pending_snapshot.copy()
+            if self.pending_snapshot is not None:
+                snapshot = self.pending_snapshot.copy()
+            else:
+                if self.current_frame is None:
+                    self.status_text = "No frame captured, retry"
+                    return
+                snapshot = self.current_frame.copy()
+
             self.processing = True
             self.status_text = "Uploading text + image to vision API..."
 
@@ -811,9 +830,6 @@ class RealtimeVoiceGroundingApp:
             if self.recording:
                 self.status_text = "Stop recording first"
                 return
-            if self.pending_snapshot is None:
-                self.status_text = "No pending text, record first"
-                return
             current_text = str(self.pending_query)
 
         edited = self._show_text_editor_dialog(current_text)
@@ -822,6 +838,8 @@ class RealtimeVoiceGroundingApp:
 
         with self.state_lock:
             self.pending_query = edited
+            if edited.strip() and self.pending_snapshot is None and self.current_frame is not None:
+                self.pending_snapshot = self.current_frame.copy()
             if edited.strip():
                 self.status_text = "Text updated, click Confirm Upload"
             else:
@@ -863,6 +881,93 @@ class RealtimeVoiceGroundingApp:
         root.mainloop()
         return result["value"]
 
+    def _clear_all_input(self):
+        with self.state_lock:
+            if self.processing:
+                self.status_text = "Processing, please wait"
+                return
+            if self.recording:
+                self.status_text = "Stop recording first"
+                return
+
+            self.pending_query = ""
+            self.pending_snapshot = None
+            self.status_text = "All input cleared"
+
+    def _pick_image_path(self):
+        tk = self._load_module(
+            "tkinter",
+            "当前环境缺少 tkinter，无法选择图片",
+        )
+        filedialog = importlib.import_module("tkinter.filedialog")
+
+        # 显式创建并销毁 root，避免某些环境下文件对话框卡死或无响应。
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        root.update()
+        try:
+            file_path = filedialog.askopenfilename(
+                parent=root,
+                title="选择新图片",
+                filetypes=[
+                    ("Image Files", "*.jpg *.jpeg *.png *.bmp *.webp"),
+                    ("All Files", "*.*"),
+                ],
+            )
+        finally:
+            root.destroy()
+
+        return self._normalize_cli_path(file_path)
+
+    def _change_image(self):
+        with self.state_lock:
+            if self.processing:
+                self.status_text = "Processing, please wait"
+                return
+            if self.recording:
+                self.status_text = "Stop recording first"
+                return
+
+        try:
+            image_path = self._pick_image_path()
+            if not image_path:
+                with self.state_lock:
+                    self.status_text = "Image unchanged"
+                return
+
+            image = self._load_input_image(image_path)
+        except Exception as exc:
+            with self.state_lock:
+                self.status_text = "Change image failed"
+                self.last_error = str(exc)
+            return
+
+        if self.cap is not None:
+            self.cap.release()
+            self.cap = None
+
+        with self.state_lock:
+            self.input_mode = "image"
+            self.upload_image_path = image_path
+            self.static_image = image
+            self.current_frame = image.copy()
+            self.overlay_image = None
+            if str(self.pending_query).strip():
+                self.pending_snapshot = image.copy()
+            else:
+                self.pending_snapshot = None
+            self.last_error = ""
+            self.status_text = "Image updated, ready to upload"
+
+    def _request_exit(self):
+        with self.state_lock:
+            if self.processing:
+                self.status_text = "Finishing current task, please wait"
+                return
+            self.should_exit = True
+            self.status_text = "Exiting..."
+
     def _process_confirmed_request(self, snapshot, query):
         try:
             boxes = self._infer_boxes(snapshot, query)
@@ -886,35 +991,27 @@ class RealtimeVoiceGroundingApp:
                 self.processing = False
 
     def _handle_text_edit_key(self, key):
-        with self.state_lock:
-            editable = (not self.processing) and (not self.recording) and (self.pending_snapshot is not None)
-            if not editable:
-                return "none"
-
-            if key in (8, 127):
-                self.pending_query = self.pending_query[:-1]
-                return "handled"
-
-            if key in (10, 13):
-                return "confirm"
-
-            if 32 <= key <= 126:
-                self.pending_query += chr(key)
-                return "handled"
-
+        # 禁用直接键盘编辑，统一通过按钮弹窗输入文本。
         return "none"
 
     def _draw_buttons(self, frame):
         with self.state_lock:
             is_recording = self.recording
             is_processing = self.processing
-            can_confirm = (self.pending_snapshot is not None) and (not is_recording) and (not is_processing)
-            can_edit = can_confirm
+            has_text = bool(str(self.pending_query).strip())
+            can_confirm = has_text and (not is_recording) and (not is_processing)
+            can_edit = (not is_recording) and (not is_processing)
+            can_clear = can_edit and bool(str(self.pending_query).strip())
+            can_change_image = (not is_recording) and (not is_processing)
+            can_exit = not is_processing
 
         start_color = (40, 160, 40)
         stop_color = (40, 40, 200)
         confirm_color = (0, 140, 255)
         edit_color = (190, 120, 30)
+        clear_color = (70, 70, 180)
+        change_image_color = (30, 140, 170)
+        exit_color = (30, 30, 220)
 
         if is_recording or is_processing:
             start_color = (90, 90, 90)
@@ -924,11 +1021,26 @@ class RealtimeVoiceGroundingApp:
             confirm_color = (90, 90, 90)
         if not can_edit:
             edit_color = (90, 90, 90)
+        if not can_clear:
+            clear_color = (90, 90, 90)
+        if not can_change_image:
+            change_image_color = (90, 90, 90)
+        if not can_exit:
+            exit_color = (90, 90, 90)
 
         self.cv2.rectangle(frame, (self.btn_start[0], self.btn_start[1]), (self.btn_start[2], self.btn_start[3]), start_color, -1)
         self.cv2.rectangle(frame, (self.btn_stop[0], self.btn_stop[1]), (self.btn_stop[2], self.btn_stop[3]), stop_color, -1)
         self.cv2.rectangle(frame, (self.btn_confirm[0], self.btn_confirm[1]), (self.btn_confirm[2], self.btn_confirm[3]), confirm_color, -1)
         self.cv2.rectangle(frame, (self.btn_edit[0], self.btn_edit[1]), (self.btn_edit[2], self.btn_edit[3]), edit_color, -1)
+        self.cv2.rectangle(frame, (self.btn_clear[0], self.btn_clear[1]), (self.btn_clear[2], self.btn_clear[3]), clear_color, -1)
+        self.cv2.rectangle(
+            frame,
+            (self.btn_change_image[0], self.btn_change_image[1]),
+            (self.btn_change_image[2], self.btn_change_image[3]),
+            change_image_color,
+            -1,
+        )
+        self.cv2.rectangle(frame, (self.btn_exit[0], self.btn_exit[1]), (self.btn_exit[2], self.btn_exit[3]), exit_color, -1)
 
         self._draw_text(frame, "Start", (self.btn_start[0] + 34, self.btn_start[1] + 38), (255, 255, 255), font_scale=0.8, thickness=2)
         self._draw_text(frame, "Stop", (self.btn_stop[0] + 44, self.btn_stop[1] + 38), (255, 255, 255), font_scale=0.8, thickness=2)
@@ -940,7 +1052,17 @@ class RealtimeVoiceGroundingApp:
             font_scale=0.72,
             thickness=2,
         )
-        self._draw_text(frame, "Edit Text", (self.btn_edit[0] + 35, self.btn_edit[1] + 38), (255, 255, 255), font_scale=0.75, thickness=2)
+        self._draw_text(frame, "Input Text", (self.btn_edit[0] + 25, self.btn_edit[1] + 38), (255, 255, 255), font_scale=0.72, thickness=2)
+        self._draw_text(frame, "Clear All", (self.btn_clear[0] + 24, self.btn_clear[1] + 38), (255, 255, 255), font_scale=0.72, thickness=2)
+        self._draw_text(
+            frame,
+            "Change Image",
+            (self.btn_change_image[0] + 6, self.btn_change_image[1] + 38),
+            (255, 255, 255),
+            font_scale=0.6,
+            thickness=2,
+        )
+        self._draw_text(frame, "Exit", (self.btn_exit[0] + 18, self.btn_exit[1] + 38), (255, 255, 255), font_scale=0.72, thickness=2)
 
     def _draw_status(self, frame):
         with self.state_lock:
@@ -966,7 +1088,16 @@ class RealtimeVoiceGroundingApp:
             self._draw_text(frame, f"Editable Text: {show_pending}_", (20, h - 75), (160, 255, 160), font_scale=0.62, thickness=2)
             self._draw_text(
                 frame,
-                "Click Edit Text for Chinese IME | Backspace/Enter still works for ASCII",
+                "Use Input Text button to edit (Chinese supported) | Click Confirm to upload | Voice appends",
+                (20, h - 45),
+                (210, 210, 210),
+                font_scale=0.55,
+                thickness=1,
+            )
+        else:
+            self._draw_text(
+                frame,
+                "Use Input Text button, or Start/Stop voice then Confirm Upload",
                 (20, h - 45),
                 (210, 210, 210),
                 font_scale=0.55,
@@ -1033,6 +1164,10 @@ class RealtimeVoiceGroundingApp:
 
                 if key == ord("q"):
                     break
+
+                with self.state_lock:
+                    if self.should_exit:
+                        break
         finally:
             if self.audio_stream is not None:
                 self.audio_stream.stop()
