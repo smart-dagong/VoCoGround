@@ -1,45 +1,45 @@
-# VoCoGround：实时摄像头 + 语音需求 + API 打标项目
+# VoCoGround: Real-Time Camera + Voice Query + API Grounding
 
-本项目实现了一个端到端交互流程：
+This project implements an end-to-end interactive workflow:
 
-- 启动时可选输入源：实时摄像头 / 本地上传图片
-- 通过按钮开始/停止语音输入用户需求
-- 在停止语音输入时，将当前输入图像与文本一起送入模型
-- 将语音识别文本 + 图片发送到视觉 API
-- 获取目标打标结果并叠加展示在窗口画面上
+- Choose an input source at startup: live camera or local image upload
+- Start and stop voice input via on-screen buttons
+- When voice input stops, send the current image and text query to the model
+- Send transcribed speech + image to a vision API
+- Receive grounding boxes and overlay results in the app window
 
-核心目标是让用户可以一边看实时画面，一边用语音描述要找的目标，然后快速看到打标结果。
-
----
-
-## 1. 功能概览
-
-### 一体化主流程
-
-主脚本：`realtime_voice_camera_grounding.py`
-
-提供以下交互能力：
-
-- 启动模式：camera（实时摄像头）/ image（上传图片）
-- 画面内按钮：开始录音 / 停止录音
-- 语音文本确认：先显示语音转文字结果，可手动修改（支持中文输入）后再确认上传
-- 停止时推理：
-  - camera 模式使用点击停止那一刻的画面
-  - image 模式使用启动时指定的图片
-- 语音识别：Whisper 将录音转为文本需求
-- 视觉定位：Qwen-VL 返回目标框
-- 多目标支持：同一需求可返回多个锚框数据
-- 实时可视化：将 API 打标结果叠加显示在主窗口
-
-### 其他脚本（模块化能力）
-
-- `camera_capture.py`：独立拍照工具
-- `whisper_model.py`：独立语音录制与转写工具
-- `qwen_vl_ref_grounding.py`：独立图文指代定位与打框工具
+The core goal is to let users watch a live view, describe targets by voice, and quickly see visual grounding results.
 
 ---
 
-## 2. 项目结构
+## 1. Features Overview
+
+### Integrated Main Flow
+
+Main script: `realtime_voice_camera_grounding.py`
+
+Interactive capabilities:
+
+- Startup mode: `camera` (live camera) / `image` (uploaded image)
+- In-window buttons: start recording / stop recording
+- Voice text confirmation: show ASR text first, allow manual edit (Chinese input supported), then confirm upload
+- Inference trigger on stop:
+  - `camera` mode uses the frame captured at stop-click
+  - `image` mode uses the selected image
+- Speech recognition: Whisper converts recording to text
+- Visual grounding: Qwen-VL returns target boxes
+- Multi-target support: one query can return multiple boxes
+- Real-time visualization: overlays grounding results on the main window
+
+### Other Scripts (Modular Tools)
+
+- `camera_capture.py`: standalone photo capture utility
+- `whisper_model.py`: standalone recording + transcription utility
+- `qwen_vl_ref_grounding.py`: standalone image-text grounding and box drawing utility
+
+---
+
+## 2. Project Structure
 
 ```text
 apikey_config.json
@@ -52,206 +52,208 @@ photos/
 
 ---
 
-## 3. 环境要求
+## 3. Requirements
 
 - Python 3.9+
-- 可用的麦克风设备
-- ffmpeg（Whisper 相关依赖）
+- Available microphone
+- ffmpeg (required by Whisper dependencies)
 
-说明：
+Notes:
 
-- 使用 `camera` 模式需要摄像头
-- 使用 `image` 模式不需要摄像头
+- `camera` mode requires a camera device
+- `image` mode does not require a camera
 
 ---
 
-## 4. 安装依赖
+## 4. Install Dependencies
 
 ```bash
 pip install -U opencv-python sounddevice numpy openai-whisper openai Pillow
 ```
 
-若希望“把照片拖入启动框内”，请额外安装：
+If you want drag-and-drop image selection in the startup dialog, install:
 
 ```bash
 pip install tkinterdnd2
 ```
 
-说明：
+Package roles:
 
-- `opencv-python`：摄像头读取与界面显示
-- `sounddevice` + `numpy`：麦克风录音
-- `openai-whisper`：语音转文本
-- `openai`：调用兼容 OpenAI 的 API（用于 Qwen-VL）
-- `Pillow`：图像绘制/打标相关支持
+- `opencv-python`: camera capture and UI rendering
+- `sounddevice` + `numpy`: microphone recording
+- `openai-whisper`: speech-to-text
+- `openai`: OpenAI-compatible API client (for Qwen-VL)
+- `Pillow`: image drawing/annotation support
 
 ---
 
-## 5. API 配置
+## 5. API Configuration
 
-默认读取 `apikey_config.json`：
+By default, the app reads `apikey_config.json`:
 
 ```json
 {
-  "api_key": "你的 API Key",
+  "api_key": "your API key",
   "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
   "model": "qwen3.5-vl-plus"
 }
 ```
 
-你也可以使用环境变量（默认变量名 `DASHSCOPE_API_KEY`）。
+You can also use environment variables (default key name: `DASHSCOPE_API_KEY`).
 
 ---
 
-## 6. 快速开始
+## 6. Quick Start
 
-运行一体化脚本：
+Run the integrated script:
 
 ```bash
 python realtime_voice_camera_grounding.py
 ```
 
-启动时可选输入源：
+Choose startup source:
 
 ```bash
-# 推荐：直接启动后在弹窗里选 camera/image
+# Recommended: launch and choose camera/image in popup
 python realtime_voice_camera_grounding.py
 
-# 也可命令行固定 camera
+# Force camera mode from CLI
 python realtime_voice_camera_grounding.py --startup-mode camera
 
-# 仍支持命令行直传图片路径（可选）
+# Image mode with direct path (optional)
 python realtime_voice_camera_grounding.py --startup-mode image --input-image photos/demo.jpg
 ```
 
-可选参数示例：
+Optional argument example:
 
 ```bash
 python realtime_voice_camera_grounding.py --camera-index 0 --whisper-model turbo --device auto
 ```
 
-常用参数：
+Common arguments:
 
 ```text
---camera-index      摄像头索引，默认 0
---width             采集宽度，默认 1280
---height            采集高度，默认 720
---sample-rate       音频采样率，默认 16000
---startup-mode      启动输入源：auto/camera/image，默认 auto
---input-image       上传图片路径（image 模式）
+--camera-index      Camera index, default 0
+--width             Capture width, default 1280
+--height            Capture height, default 720
+--sample-rate       Audio sample rate, default 16000
+--startup-mode      Startup source: auto/camera/image, default auto
+--input-image       Image path for image mode
 --whisper-model     tiny/base/small/medium/large/turbo
 --device            auto/cpu/cuda
---source-language   输入语种（如 zh/en），默认 auto
---api-config        API 配置文件路径，默认 apikey_config.json
---model             视觉模型名，默认 qwen3.5-vl-plus
---max-boxes         最多保留的锚框数量，默认 20（0 表示不限）
---result-json       锚框结果输出 JSON，默认 latest_boxes.json（留空不保存）
+--source-language   Input language (e.g. zh/en), default auto
+--api-config        API config file path, default apikey_config.json
+--model             Vision model name, default qwen3.5-vl-plus
+--max-boxes         Max boxes to keep, default 20 (0 = unlimited)
+--result-json       Output JSON path for boxes, default latest_boxes.json (empty disables saving)
 ```
 
-锚框结果 JSON 示例：
+Grounding result JSON example:
 
 ```json
 {
-  "query": "圈出左边穿红衣服的人",
+  "query": "highlight people in red on the left",
   "count": 3,
   "model": "qwen3.5-vl-plus",
   "boxes": [
-    {"bbox": [120, 88, 260, 420], "label": "person_red_left", "score": 0.93},
-    {"bbox": [300, 96, 438, 430], "label": "person_red_center", "score": 0.89}
+    {"bbox": [120, 88, 260, 420], "label": "person_red_left1"},
+    {"bbox": [300, 96, 438, 430], "label": "person_red_center1"}
   ]
 }
 ```
 
----
-
-## 7. 交互流程
-
-### camera 模式（实时摄像头）
-
-1. 启动程序后，看到实时摄像头窗口。
-2. 点击“开始录音”。
-3. 说出需求，例如：圈出左边穿红衣服的人。
-4. 点击“停止录音”。
-5. 程序先执行语音转文本，并在屏幕显示 `Editable Text`。
-6. 通过 `Input Text` 按钮打开编辑框修改文本。
-7. 编辑框支持中文输入。
-8. 点击 `Confirm Upload` 确认上传。
-9. 程序再执行图片 + 文本定位并返回打标结果。
-10. 打标结果叠加显示在实时画面中。
-11. 可点击 `Clear All` 一键清空当前输入文本。
-12. 可点击 `Change Image` 在运行中切换到新图片（无需重启）。
-13. 可点击 `Exit` 按钮直接退出（或按 `q`）。
-
-补充：也可不录音，点击 `Input Text` 输入文本后再点 `Confirm Upload` 上传当前画面；再次语音输入时会追加到现有文本，不会重置。
-
-### image 模式（上传图片 + 语音指代）
-
-1. 启动程序后，在“启动模式”弹窗中选择 `Image`。
-2. 将照片直接拖入弹窗中的拖拽框（或点击“浏览”）。
-3. 点击“开始”，程序加载图片并显示在窗口中。
-4. 点击“开始录音”。
-5. 说出需求，例如：圈出图中左侧红色杯子。
-6. 点击“停止录音”。
-7. 程序先显示语音转文字结果，用户可点击 `Input Text` 修改。
-8. 编辑框支持中文输入。
-9. 点击 `Confirm Upload` 后，程序才会调用视觉 API。
-10. 程序执行：文本 + 图片定位 -> 叠加展示结果。
-11. 可点击 `Clear All` 清空输入，重新编辑需求。
-12. 可点击 `Change Image` 更换图片并继续交互。
-13. 可重复录音多次，点击 `Exit`（或按 `q`）退出程序。
-
-补充：在 image 模式下也支持不录音，直接输入文本后确认上传。
-
-补充：若未安装 `tkinterdnd2`，拖拽框会提示“拖拽未启用”，此时可继续使用“浏览”选择图片。
+Note: labels are auto-numbered (same class/label becomes `car1`, `car2`, `car3`, ... in appearance order).
 
 ---
 
-## 8. 调试建议
+## 7. Interaction Flow
 
-如果遇到问题，优先检查：
+### Camera Mode (Live Camera)
 
-- 麦克风权限是否开放
-- 摄像头是否被其他程序占用
-- API Key、base_url、model 是否配置正确
-- 当前 Python 环境是否安装完整依赖
+1. Launch the app and open the live camera window.
+2. Click Start Recording.
+3. Speak your query, for example: highlight the person in red on the left.
+4. Click Stop Recording.
+5. The app transcribes speech first and shows `Editable Text`.
+6. Use `Input Text` to open the text editor and modify the query.
+7. Chinese input is supported in the editor.
+8. Click `Confirm Upload` to submit.
+9. The app runs image + text grounding and returns boxes.
+10. Results are overlaid on the live view.
+11. Click `Clear All` to reset current text.
+12. Click `Change Image` to switch image during runtime (no restart required).
+13. Click `Exit` (or press `q`) to quit.
 
-### 常见环境报错快速修复
+Extra: you can skip recording, enter text via `Input Text`, and click `Confirm Upload` directly. New voice input appends to existing text rather than replacing it.
+
+### Image Mode (Uploaded Image + Voice Query)
+
+1. Launch the app and choose `Image` in the startup dialog.
+2. Drag an image into the drop area (or click Browse).
+3. Click Start to load and display the image.
+4. Click Start Recording.
+5. Speak your query, for example: highlight the red cup on the left.
+6. Click Stop Recording.
+7. The app shows transcribed text first; you can edit it via `Input Text`.
+8. Chinese input is supported in the editor.
+9. The vision API is called only after you click `Confirm Upload`.
+10. The app performs text + image grounding and overlays results.
+11. Click `Clear All` to reset and rewrite the query.
+12. Click `Change Image` to switch to another image and continue.
+13. Repeat as needed; click `Exit` (or press `q`) to quit.
+
+Extra: in image mode, you can also skip recording and submit text directly.
+
+Extra: if `tkinterdnd2` is not installed, drag-and-drop is disabled and the dialog will show a hint. Browse still works.
+
+---
+
+## 8. Debugging Tips
+
+If something goes wrong, check first:
+
+- Microphone permission
+- Whether the camera is occupied by another program
+- Whether API key, base_url, and model are correct
+- Whether all dependencies are installed in the active Python environment
+
+### Common Environment Fixes
 
 1. `A module that was compiled using NumPy 1.x cannot be run in NumPy 2.x`
 
-这是 `torch/openai-whisper` 与 `numpy 2.x` 的兼容问题。请在当前环境执行：
+This is a compatibility issue between `torch/openai-whisper` and `numpy 2.x`. Run:
 
 ```bash
 pip install "numpy<2" --upgrade
 ```
 
-2. `FileNotFoundError` 出现在 `SSL_CERT_FILE`
+2. `FileNotFoundError` on `SSL_CERT_FILE`
 
-这是环境变量 `SSL_CERT_FILE` 指向了不存在的证书文件。可在当前终端先执行：
-
-Windows PowerShell:
+This means `SSL_CERT_FILE` points to a missing certificate file. In PowerShell, run:
 
 ```powershell
 Remove-Item Env:SSL_CERT_FILE -ErrorAction SilentlyContinue
 python realtime_voice_camera_grounding.py
 ```
 
-脚本内部也已增加自动兜底：若检测到无效证书路径，会自动清理并尝试使用 `certifi` 证书。
+The script also includes a fallback: if an invalid cert path is detected, it clears it and tries `certifi` automatically.
 
-可先分别运行模块脚本定位问题：
+You can also test each module separately:
 
 - `python camera_capture.py`
 - `python whisper_model.py`
-- `python qwen_vl_ref_grounding.py --image photos/xxx.jpg --query "圈出目标"`
+- `python qwen_vl_ref_grounding.py --image photos/xxx.jpg --query "highlight target"`
 
 ---
 
-## 9. 说明
+## 9. Notes
 
-本项目用于学习与演示“多模态交互闭环”：语音输入需求 + 实时视觉理解 + 结果可视化。
-可继续扩展的方向包括：
+This project is for learning and demonstrating a multimodal interaction loop:
+voice query + real-time visual understanding + result visualization.
 
-- 连续跟踪同类目标
-- 多目标类别筛选
-- 语音唤醒词与自动开始/停止
-- UI 主题化与状态面板增强
+Potential extensions:
+
+- Continuous tracking for same-category targets
+- Multi-class target filtering
+- Wake-word plus automatic start/stop recording
+- Themed UI and richer status panel
